@@ -7,9 +7,11 @@ import SettingsModal from "@/components/SettingsModal";
 import SuggestionCard from "@/components/SuggestionCard";
 import { DEFAULT_SETTINGS, SUGGESTION_TYPE_META } from "@/lib/prompts";
 import { useMicRecorder } from "@/lib/useMicRecorder";
+import { useSuggestions } from "@/lib/useSuggestions";
 import type {
   AppSettings,
   ChatMessage,
+  MeetingType,
   SuggestionBatch,
   TranscriptChunk,
 } from "@/lib/types";
@@ -17,57 +19,7 @@ import type {
 const API_KEY_STORAGE = "twinmind.groq_api_key";
 const SETTINGS_STORAGE = "twinmind.settings";
 
-// Day 1 demo content — Suggestions/Chat columns. Replaced by real state in
-// Day 3 and Day 5 respectively. The Transcript column is now fully live.
-const SAMPLE_BATCHES: SuggestionBatch[] = [
-  {
-    id: "b4",
-    timestamp: "03:49:16 PM",
-    transcriptWordCount: 54,
-    suggestions: [
-      {
-        id: "s1",
-        type: "answer",
-        preview:
-          "For state-in-memory issues: Redis Cluster + consistent hashing handles ~1M ops/sec/node.",
-        detail_hint: "Expand on Redis Cluster topology and failover behavior.",
-        meeting_phase: "deep_dive",
-      },
-      {
-        id: "s2",
-        type: "fact_check",
-        preview:
-          "Discord publicly serves ~15M concurrent voice users on Elixir/Erlang infra.",
-        detail_hint: "Cite the Discord engineering blog post on this number.",
-        meeting_phase: "deep_dive",
-      },
-      {
-        id: "s3",
-        type: "question_to_ask",
-        preview:
-          "What's your read/write ratio? That changes the sharding strategy significantly.",
-        detail_hint: "Discuss read-heavy vs write-heavy sharding tradeoffs.",
-        meeting_phase: "deep_dive",
-      },
-    ],
-  },
-  {
-    id: "b3",
-    timestamp: "03:48:46 PM",
-    transcriptWordCount: 34,
-    suggestions: [
-      {
-        id: "s4",
-        type: "answer",
-        preview:
-          "Managed Kafka (MSK) at ~1M events/sec runs roughly $8–15k/mo on AWS.",
-        detail_hint: "Compare against self-hosted Kafka on Graviton.",
-        meeting_phase: "deep_dive",
-      },
-    ],
-  },
-];
-
+// Day 5 — chat still uses sample content; Day 5 wires it to /api/chat.
 const SAMPLE_CHAT: ChatMessage[] = [
   {
     id: "c1",
@@ -128,6 +80,7 @@ export default function Home() {
   const [transcript, setTranscript] = useState<TranscriptChunk[]>([]);
   const [transcribingCount, setTranscribingCount] = useState(0);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
+  const [meetingStartTime, setMeetingStartTime] = useState<string | null>(null);
 
   const apiKeyRef = useRef(apiKey);
   useEffect(() => {
@@ -206,6 +159,7 @@ export default function Home() {
           wordCount: countWords(text),
         },
       ]);
+      setMeetingStartTime((prev) => prev ?? new Date().toISOString());
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Transcription failed";
       setTranscriptError(msg);
@@ -227,6 +181,17 @@ export default function Home() {
   useEffect(() => {
     if (recorder.error) setTranscriptError(recorder.error);
   }, [recorder.error]);
+
+  const suggestions = useSuggestions({
+    transcript,
+    meetingStartTime,
+    apiKey,
+    settings,
+    // Keep auto-refresh alive while transcript exists (even after stop) so
+    // the user can manually reload on stored transcript; pause only when
+    // there's literally nothing yet.
+    enabled: transcript.length > 0 && Boolean(apiKey),
+  });
 
   const canRecord = Boolean(apiKey);
 
@@ -265,7 +230,16 @@ export default function Home() {
               : undefined
           }
         />
-        <SuggestionsColumn batches={SAMPLE_BATCHES} />
+        <SuggestionsColumn
+          batches={suggestions.batches}
+          isLoading={suggestions.isLoading}
+          error={suggestions.error}
+          nextRefreshInSeconds={suggestions.nextRefreshInSeconds}
+          transcriptHasContent={transcript.length > 0}
+          apiKeySet={Boolean(apiKey)}
+          onReload={() => suggestions.refresh({ force: true })}
+          onDismissError={suggestions.clearError}
+        />
         <ChatColumn chat={SAMPLE_CHAT} />
       </main>
 
@@ -364,19 +338,57 @@ function TranscriptColumn({
   );
 }
 
-function SuggestionsColumn({ batches }: { batches: SuggestionBatch[] }) {
+function SuggestionsColumn({
+  batches,
+  isLoading,
+  error,
+  nextRefreshInSeconds,
+  transcriptHasContent,
+  apiKeySet,
+  onReload,
+  onDismissError,
+}: {
+  batches: SuggestionBatch[];
+  isLoading: boolean;
+  error: string | null;
+  nextRefreshInSeconds: number | null;
+  transcriptHasContent: boolean;
+  apiKeySet: boolean;
+  onReload: () => void;
+  onDismissError: () => void;
+}) {
   const totalBatches = batches.length;
+  const latestMeetingType = batches[0]?.meetingType;
+  const canReload = !isLoading && transcriptHasContent && apiKeySet;
+
+  const refreshHint =
+    !apiKeySet
+      ? "API key required"
+      : !transcriptHasContent
+        ? "Start recording"
+        : isLoading
+          ? "Generating…"
+          : nextRefreshInSeconds != null
+            ? `Next auto-refresh in ${nextRefreshInSeconds}s`
+            : "Auto-refresh paused";
+
   return (
     <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-xl shadow-black/40">
       <ColumnHeader
         index={2}
         title="Live Suggestions"
-        badge={`${totalBatches} ${totalBatches === 1 ? "Batch" : "Batches"}`}
+        badge={
+          latestMeetingType
+            ? formatMeetingTypeLabel(latestMeetingType)
+            : `${totalBatches} ${totalBatches === 1 ? "Batch" : "Batches"}`
+        }
+        badgeTone={latestMeetingType ? "teal" : "muted"}
       />
       <div className="flex items-center justify-between px-6 pt-4">
         <button
-          disabled
-          className="inline-flex items-center gap-1.5 rounded-md border border-[var(--accent-teal-dim)] bg-transparent px-3 py-1.5 text-[13px] font-medium text-[var(--accent-teal)] opacity-90"
+          onClick={onReload}
+          disabled={!canReload}
+          className="inline-flex items-center gap-1.5 rounded-md border border-[var(--accent-teal-dim)] bg-transparent px-3 py-1.5 text-[13px] font-medium text-[var(--accent-teal)] transition hover:bg-teal-500/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -386,6 +398,7 @@ function SuggestionsColumn({ batches }: { batches: SuggestionBatch[] }) {
             viewBox="0 0 24 24"
             stroke="currentColor"
             strokeWidth="2.2"
+            className={isLoading ? "animate-spin" : ""}
           >
             <path
               strokeLinecap="round"
@@ -393,43 +406,122 @@ function SuggestionsColumn({ batches }: { batches: SuggestionBatch[] }) {
               d="M4 4v6h6M20 20v-6h-6M4 10a8 8 0 0 1 14.32-4.9M20 14a8 8 0 0 1-14.32 4.9"
             />
           </svg>
-          Reload suggestions
+          {isLoading ? "Reloading…" : "Reload suggestions"}
         </button>
         <span className="text-[12px] text-[var(--text-muted)]">
-          auto-refresh idle (Day 3)
+          {refreshHint}
         </span>
       </div>
-      <InfoBox>
-        On reload (or auto every ~30s), generate{" "}
-        <span className="font-semibold text-[var(--text-primary)]">
-          3 fresh suggestions
-        </span>{" "}
-        from recent transcript context. New batch appears at the top; older
-        batches push down (faded). Each is a tappable card: a{" "}
-        <span className="text-sky-300">question to ask</span>, a{" "}
-        <span className="text-violet-300">talking point</span>, an{" "}
-        <span className="text-emerald-300">answer</span>, or a{" "}
-        <span className="text-amber-300">fact-check</span>.
-      </InfoBox>
+
+      {error && (
+        <div className="mx-6 mt-4 flex items-start justify-between gap-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-[13px] leading-relaxed text-rose-200">
+          <span className="break-words">{error}</span>
+          <button
+            onClick={onDismissError}
+            className="rounded text-rose-300 hover:text-rose-100"
+            aria-label="Dismiss error"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       <div className="flex-1 space-y-3 overflow-y-auto px-6 py-4">
+        {totalBatches === 0 && !isLoading && (
+          <SuggestionsEmptyState
+            apiKeySet={apiKeySet}
+            transcriptHasContent={transcriptHasContent}
+          />
+        )}
+        {totalBatches === 0 && isLoading && <SuggestionsSkeleton />}
         {batches.map((batch, batchIdx) => (
           <div key={batch.id} className="space-y-3">
-            {batchIdx > 0 && (
-              <div className="flex items-center gap-3 py-1">
-                <div className="h-px flex-1 bg-[var(--border-subtle)]" />
-                <span className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-muted)]">
-                  Batch {totalBatches - batchIdx} · {batch.timestamp}
-                </span>
-                <div className="h-px flex-1 bg-[var(--border-subtle)]" />
-              </div>
-            )}
+            <div className="flex items-center gap-3 py-1">
+              <div className="h-px flex-1 bg-[var(--border-subtle)]" />
+              <span className="text-[11px] uppercase tracking-[0.14em] text-[var(--text-muted)]">
+                {batchIdx === 0 ? "Latest" : `Batch ${totalBatches - batchIdx}`}
+                {" · "}
+                {batch.timestamp}
+                {batch.meetingType && (
+                  <>
+                    {" · "}
+                    <span className="text-[var(--accent-teal)]">
+                      {formatMeetingTypeLabel(batch.meetingType)}
+                    </span>
+                  </>
+                )}
+              </span>
+              <div className="h-px flex-1 bg-[var(--border-subtle)]" />
+            </div>
             {batch.suggestions.map((s) => (
               <SuggestionCard key={s.id} suggestion={s} faded={batchIdx > 0} />
             ))}
           </div>
         ))}
+        {totalBatches > 0 && isLoading && (
+          <div className="flex items-center justify-center gap-2 py-2 text-[12px] text-[var(--text-muted)]">
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent-teal)] animate-pulse-soft" />
+            Generating next batch…
+          </div>
+        )}
       </div>
     </section>
+  );
+}
+
+function formatMeetingTypeLabel(t: MeetingType): string {
+  return t.replace(/_/g, " ").toUpperCase();
+}
+
+function SuggestionsEmptyState({
+  apiKeySet,
+  transcriptHasContent,
+}: {
+  apiKeySet: boolean;
+  transcriptHasContent: boolean;
+}) {
+  let title = "Waiting for the first batch";
+  let body =
+    "Record for a few seconds — the first suggestions land as soon as there's enough speech to reason about.";
+  if (!apiKeySet) {
+    title = "Add your Groq API key";
+    body =
+      "Open Settings and paste your Groq API key. Suggestions use Llama-class models hosted on Groq.";
+  } else if (!transcriptHasContent) {
+    title = "No transcript yet";
+    body =
+      "Start recording in the left column. After a few seconds the first 3 suggestions will appear here, then refresh every 30s.";
+  }
+  return (
+    <div className="flex h-full flex-col items-center justify-center text-center">
+      <div className="max-w-[280px] space-y-2">
+        <p className="text-[13px] font-semibold text-[var(--text-primary)]">
+          {title}
+        </p>
+        <p className="text-[12.5px] leading-relaxed text-[var(--text-muted)]">
+          {body}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function SuggestionsSkeleton() {
+  return (
+    <div className="space-y-3">
+      {[0, 1, 2].map((i) => (
+        <div
+          key={i}
+          className="rounded-md border border-[var(--border-subtle)] border-l-4 border-l-[var(--bg-panel-soft)] bg-[var(--bg-card)] px-4 py-3"
+        >
+          <div className="mb-2 h-3 w-20 animate-pulse-soft rounded bg-[var(--bg-panel-soft)]" />
+          <div className="space-y-1.5">
+            <div className="h-3 w-full animate-pulse-soft rounded bg-[var(--bg-panel-soft)]" />
+            <div className="h-3 w-[85%] animate-pulse-soft rounded bg-[var(--bg-panel-soft)]" />
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
