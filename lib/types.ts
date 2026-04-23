@@ -35,6 +35,13 @@ export interface SuggestionBatch {
   suggestions: Suggestion[];
   timestamp: string;
   transcriptWordCount: number;
+  meetingType?: MeetingType;
+}
+
+export interface SuggestionsApiResponse {
+  suggestions: Suggestion[];
+  meeting_type: MeetingType;
+  context: SuggestionContext;
 }
 
 export interface ChatMessage {

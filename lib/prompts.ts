@@ -47,14 +47,33 @@ PHASE ADJUSTMENT:
 - deep_dive — favor answers, fact-checks, and substantive talking points
 - closing — favor action-item talking points, closing questions
 
-Return ONLY valid JSON matching this exact schema, no preamble, no markdown fences:
+Return ONLY valid JSON matching this exact schema. No preamble, no commentary, no markdown code fences:
 {
+  "meeting_type": "interview" | "sales_call" | "brainstorm" | "technical_sync" | "lecture" | "one_on_one" | "generic",
   "suggestions": [
-    { "type": "answer" | "fact_check" | "question_to_ask" | "talking_point", "preview": "<1-2 sentences>", "detail_hint": "<one line hint of what a detailed answer would add>", "meeting_phase": "opening" | "deep_dive" | "closing" }
+    {
+      "type": "answer" | "fact_check" | "question_to_ask" | "talking_point",
+      "preview": "<1-2 sentences, self-contained value>",
+      "detail_hint": "<one-line hint of what the expanded answer will add>",
+      "meeting_phase": "opening" | "deep_dive" | "closing"
+    }
   ]
 }
 
-The array MUST contain exactly 3 items.`;
+The "suggestions" array MUST contain exactly 3 items.`;
+
+export const DEFAULT_ROLLING_SUMMARY_PROMPT = `You compress meeting transcripts for context retention.
+
+You will receive a long stretch of older transcript that is about to be dropped from the recent-context window. Summarize it so a copilot reading ONLY the summary plus the recent transcript can still make well-grounded suggestions.
+
+Rules:
+- Output a single paragraph of 120–180 words, no bullet points, no headings.
+- Preserve: people/roles mentioned, concrete claims/numbers, decisions reached, open questions, topic arcs in order.
+- Omit filler, hedging, and repetition.
+- Do NOT invent anything. If something is ambiguous, say so briefly.
+- Write in third person neutral.
+
+Return ONLY the summary paragraph. No preamble.`;
 
 export const DEFAULT_DETAILED_ANSWER_PROMPT = `You are a meeting copilot providing a detailed, longer-form answer to a suggestion the user clicked.
 
