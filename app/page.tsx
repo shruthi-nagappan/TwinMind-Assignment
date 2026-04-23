@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import AppHeader from "@/components/AppHeader";
 import MicTranscript from "@/components/MicTranscript";
 import SettingsModal from "@/components/SettingsModal";
@@ -8,55 +10,18 @@ import SuggestionCard from "@/components/SuggestionCard";
 import { DEFAULT_SETTINGS, SUGGESTION_TYPE_META } from "@/lib/prompts";
 import { useMicRecorder } from "@/lib/useMicRecorder";
 import { useSuggestions } from "@/lib/useSuggestions";
+import { useChat } from "@/lib/useChat";
 import type {
   AppSettings,
   ChatMessage,
   MeetingType,
+  Suggestion,
   SuggestionBatch,
   TranscriptChunk,
 } from "@/lib/types";
 
 const API_KEY_STORAGE = "twinmind.groq_api_key";
 const SETTINGS_STORAGE = "twinmind.settings";
-
-// Day 5 — chat still uses sample content; Day 5 wires it to /api/chat.
-const SAMPLE_CHAT: ChatMessage[] = [
-  {
-    id: "c1",
-    role: "user",
-    timestamp: "03:49:22 PM",
-    content: "What's your current p99 latency on websocket round-trips?",
-    linkedSuggestion: {
-      type: "question_to_ask",
-      preview: "What's your current p99 latency on websocket round-trips?",
-    },
-  },
-  {
-    id: "c2",
-    role: "assistant",
-    timestamp: "03:49:24 PM",
-    content:
-      'Detailed answer to: "What\'s your current p99 latency on websocket round-trips?"\n\nThis is where a separate, longer-form prompt runs against the chat model with full transcript context. Streamed response ideally. Candidates choose model + prompt strategy — we evaluate quality, latency, relevance.',
-  },
-  {
-    id: "c3",
-    role: "user",
-    timestamp: "03:49:40 PM",
-    content: "Managed Kafka (MSK) at ~1M events/sec runs roughly $8–15k/mo on AWS.",
-    linkedSuggestion: {
-      type: "answer",
-      preview:
-        "Managed Kafka (MSK) at ~1M events/sec runs roughly $8–15k/mo on AWS.",
-    },
-  },
-  {
-    id: "c4",
-    role: "assistant",
-    timestamp: "03:49:42 PM",
-    content:
-      'Detailed answer to: "Managed Kafka (MSK) at ~1M events/sec runs roughly $8–15k/mo on AWS."\n\nThis is where a separate, longer-form prompt runs against the chat model…',
-  },
-];
 
 function formatClockTime(d: Date = new Date()): string {
   return d.toLocaleTimeString("en-US", {
@@ -193,6 +158,22 @@ export default function Home() {
     enabled: transcript.length > 0 && Boolean(apiKey),
   });
 
+  const detectedMeetingType = suggestions.batches[0]?.meetingType ?? null;
+
+  const chat = useChat({
+    transcript,
+    detectedMeetingType,
+    apiKey,
+    settings,
+  });
+
+  const handleExpandSuggestion = useCallback(
+    (s: Suggestion) => {
+      void chat.expandSuggestion(s);
+    },
+    [chat],
+  );
+
   const canRecord = Boolean(apiKey);
 
   async function handleToggleRecord() {
@@ -239,8 +220,19 @@ export default function Home() {
           apiKeySet={Boolean(apiKey)}
           onReload={() => suggestions.refresh({ force: true })}
           onDismissError={suggestions.clearError}
+          onSuggestionClick={handleExpandSuggestion}
         />
-        <ChatColumn chat={SAMPLE_CHAT} />
+        <ChatColumn
+          messages={chat.messages}
+          streamingAssistantId={chat.streamingAssistantId}
+          isStreaming={chat.isStreaming}
+          error={chat.error}
+          apiKeySet={Boolean(apiKey)}
+          onSend={chat.send}
+          onAbort={chat.abort}
+          onClear={chat.clear}
+          onDismissError={chat.clearError}
+        />
       </main>
 
       <SettingsModal
@@ -347,6 +339,7 @@ function SuggestionsColumn({
   apiKeySet,
   onReload,
   onDismissError,
+  onSuggestionClick,
 }: {
   batches: SuggestionBatch[];
   isLoading: boolean;
@@ -356,6 +349,7 @@ function SuggestionsColumn({
   apiKeySet: boolean;
   onReload: () => void;
   onDismissError: () => void;
+  onSuggestionClick?: (s: Suggestion) => void;
 }) {
   const totalBatches = batches.length;
   const latestMeetingType = batches[0]?.meetingType;
@@ -454,7 +448,12 @@ function SuggestionsColumn({
               <div className="h-px flex-1 bg-[var(--border-subtle)]" />
             </div>
             {batch.suggestions.map((s) => (
-              <SuggestionCard key={s.id} suggestion={s} faded={batchIdx > 0} />
+              <SuggestionCard
+                key={s.id}
+                suggestion={s}
+                faded={batchIdx > 0}
+                onClick={onSuggestionClick}
+              />
             ))}
           </div>
         ))}
@@ -525,44 +524,179 @@ function SuggestionsSkeleton() {
   );
 }
 
-function ChatColumn({ chat }: { chat: ChatMessage[] }) {
+function ChatColumn({
+  messages,
+  streamingAssistantId,
+  isStreaming,
+  error,
+  apiKeySet,
+  onSend,
+  onAbort,
+  onClear,
+  onDismissError,
+}: {
+  messages: ChatMessage[];
+  streamingAssistantId: string | null;
+  isStreaming: boolean;
+  error: string | null;
+  apiKeySet: boolean;
+  onSend: (content: string) => Promise<void> | void;
+  onAbort: () => void;
+  onClear: () => void;
+  onDismissError: () => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    // Keep the chat scrolled to the bottom as new tokens stream in.
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [messages, streamingAssistantId]);
+
+  const canSend = draft.trim().length > 0 && !isStreaming && apiKeySet;
+
+  const submit = async () => {
+    if (!canSend) return;
+    const content = draft;
+    setDraft("");
+    await onSend(content);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void submit();
+    }
+  };
+
+  const placeholder = !apiKeySet
+    ? "Add your API key in Settings to chat"
+    : isStreaming
+      ? "Streaming response…"
+      : "Ask anything about this meeting — or click a suggestion to expand";
+
   return (
     <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-xl shadow-black/40">
       <ColumnHeader
         index={3}
         title="Chat (Detailed Answers)"
-        badge="Session-only"
+        badge={
+          isStreaming
+            ? "Streaming"
+            : messages.length > 0
+              ? `${messages.filter((m) => m.role === "user").length} Msg${messages.filter((m) => m.role === "user").length === 1 ? "" : "s"}`
+              : "Session-only"
+        }
+        badgeTone={isStreaming ? "teal" : "muted"}
       />
-      <InfoBox>
-        Clicking a suggestion adds it to this chat and streams a detailed
-        answer (separate prompt, more context). User can also type questions
-        directly. One continuous chat per session — no login, no persistence.
-      </InfoBox>
-      <div className="flex-1 space-y-5 overflow-y-auto px-6 py-5">
-        {chat.map((msg) => (
-          <ChatMessageItem key={msg.id} message={msg} />
-        ))}
-      </div>
-      <div className="border-t border-[var(--border-subtle)] p-4">
-        <div className="flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel-soft)] pr-1">
-          <input
-            disabled
-            placeholder="Ask anything… (Day 5)"
-            className="flex-1 bg-transparent px-3 py-2.5 text-[14px] text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none"
-          />
+
+      {messages.length > 0 && (
+        <div className="flex items-center justify-end px-6 pt-3">
           <button
-            disabled
-            className="rounded-md bg-[var(--accent-teal-dim)] px-4 py-2 text-[13px] font-medium text-white opacity-90"
+            onClick={onClear}
+            disabled={isStreaming}
+            className="text-[12px] text-[var(--text-muted)] transition hover:text-[var(--text-primary)] disabled:opacity-40"
           >
-            Send
+            Clear chat
           </button>
         </div>
+      )}
+
+      {error && (
+        <div className="mx-6 mt-3 flex items-start justify-between gap-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2.5 text-[13px] leading-relaxed text-rose-200">
+          <span className="break-words">{error}</span>
+          <button
+            onClick={onDismissError}
+            className="rounded text-rose-300 hover:text-rose-100"
+            aria-label="Dismiss error"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      <div
+        ref={scrollRef}
+        className="flex-1 space-y-5 overflow-y-auto px-6 py-5"
+      >
+        {messages.length === 0 ? (
+          <ChatEmptyState apiKeySet={apiKeySet} />
+        ) : (
+          messages.map((msg) => (
+            <ChatMessageItem
+              key={msg.id}
+              message={msg}
+              isStreaming={msg.id === streamingAssistantId}
+            />
+          ))
+        )}
+      </div>
+
+      <div className="border-t border-[var(--border-subtle)] p-4">
+        <div className="flex items-end gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel-soft)] pr-1 focus-within:border-[var(--accent-teal-dim)]">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={!apiKeySet}
+            rows={1}
+            placeholder={placeholder}
+            className="flex-1 resize-none bg-transparent px-3 py-2.5 text-[14px] leading-relaxed text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none disabled:cursor-not-allowed"
+          />
+          {isStreaming ? (
+            <button
+              onClick={onAbort}
+              className="rounded-md bg-rose-500/80 px-4 py-2 text-[13px] font-medium text-white transition hover:bg-rose-500"
+            >
+              Stop
+            </button>
+          ) : (
+            <button
+              onClick={() => void submit()}
+              disabled={!canSend}
+              className="rounded-md bg-[var(--accent-teal)] px-4 py-2 text-[13px] font-medium text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:brightness-100"
+            >
+              Send
+            </button>
+          )}
+        </div>
+        <p className="mt-2 text-[11px] text-[var(--text-muted)]">
+          Enter to send · Shift+Enter for newline · full transcript is included
+          as context
+        </p>
       </div>
     </section>
   );
 }
 
-function ChatMessageItem({ message }: { message: ChatMessage }) {
+function ChatEmptyState({ apiKeySet }: { apiKeySet: boolean }) {
+  const title = apiKeySet ? "No messages yet" : "Add your Groq API key";
+  const body = apiKeySet
+    ? "Click any suggestion in the middle column to expand it into a detailed answer here, or type a question about the meeting directly."
+    : "Open Settings and paste your Groq API key to enable chat.";
+  return (
+    <div className="flex h-full flex-col items-center justify-center text-center">
+      <div className="max-w-[280px] space-y-2">
+        <p className="text-[13px] font-semibold text-[var(--text-primary)]">
+          {title}
+        </p>
+        <p className="text-[12.5px] leading-relaxed text-[var(--text-muted)]">
+          {body}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ChatMessageItem({
+  message,
+  isStreaming,
+}: {
+  message: ChatMessage;
+  isStreaming: boolean;
+}) {
   if (message.role === "user") {
     const meta = message.linkedSuggestion
       ? SUGGESTION_TYPE_META[message.linkedSuggestion.type]
@@ -586,13 +720,58 @@ function ChatMessageItem({ message }: { message: ChatMessage }) {
       </div>
     );
   }
+  return <AssistantMessage message={message} isStreaming={isStreaming} />;
+}
+
+function AssistantMessage({
+  message,
+  isStreaming,
+}: {
+  message: ChatMessage;
+  isStreaming: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+  const canCopy = !isStreaming && message.content.length > 0;
+
+  const onCopy = () => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) return;
+    void navigator.clipboard.writeText(message.content).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    });
+  };
+
   return (
-    <div>
-      <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text-muted)]">
-        Assistant
+    <div className="group">
+      <div className="mb-1.5 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text-muted)]">
+        <span>Assistant</span>
+        {isStreaming && (
+          <span className="flex items-center gap-1 text-[var(--accent-teal)]">
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent-teal)] animate-pulse-soft" />
+            streaming
+          </span>
+        )}
+        {canCopy && (
+          <button
+            onClick={onCopy}
+            className="ml-auto rounded px-1.5 py-0.5 text-[10px] font-medium tracking-[0.12em] text-[var(--text-muted)] opacity-0 transition hover:text-[var(--text-primary)] group-hover:opacity-100"
+            aria-label="Copy assistant message"
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+        )}
       </div>
-      <div className="space-y-2 whitespace-pre-wrap px-0.5 text-[14px] leading-relaxed text-[var(--text-primary)]">
-        {message.content}
+      <div className="chat-markdown px-0.5 text-[14px] leading-relaxed text-[var(--text-primary)]">
+        {message.content ? (
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {message.content}
+          </ReactMarkdown>
+        ) : isStreaming ? (
+          <span className="text-[var(--text-muted)]">…</span>
+        ) : null}
+        {isStreaming && message.content && (
+          <span className="ml-0.5 inline-block h-[14px] w-[2px] -translate-y-[1px] animate-pulse-soft bg-[var(--accent-teal)] align-middle" />
+        )}
       </div>
     </div>
   );

@@ -24,6 +24,9 @@ export interface BuildContextArgs {
   /** Optional Groq client. When provided and older transcript is long, we run
    *  a rolling-summary call to compress it; otherwise the summary is plain. */
   groq?: Groq;
+  /** Optional override for the rolling-summary system prompt (editable in
+   *  Settings). Falls back to DEFAULT_ROLLING_SUMMARY_PROMPT. */
+  rollingSummaryPrompt?: string;
 }
 
 function extractLastSentence(text: string): string {
@@ -57,9 +60,11 @@ function splitWords(s: string): string[] {
 async function compressOlder({
   groq,
   olderText,
+  systemPrompt,
 }: {
   groq: Groq;
   olderText: string;
+  systemPrompt: string;
 }): Promise<string> {
   // Cap input size — if older transcript is enormous we only summarize the
   // most recent portion of "older" (which matters most for continuity).
@@ -74,7 +79,7 @@ async function compressOlder({
     temperature: 0.2,
     max_tokens: 400,
     messages: [
-      { role: "system", content: DEFAULT_ROLLING_SUMMARY_PROMPT },
+      { role: "system", content: systemPrompt },
       { role: "user", content: input },
     ],
   });
@@ -96,7 +101,10 @@ export async function buildSuggestionContext({
   windowWords,
   meetingStartTime,
   groq,
+  rollingSummaryPrompt,
 }: BuildContextArgs): Promise<SuggestionContext> {
+  const summaryPrompt =
+    rollingSummaryPrompt?.trim() || DEFAULT_ROLLING_SUMMARY_PROMPT;
   const joined = chunks.map((c) => c.text).join(" ").trim();
   const allWords = splitWords(joined);
 
@@ -110,7 +118,11 @@ export async function buildSuggestionContext({
   if (olderWords.length > 0) {
     if (groq && olderWords.length > ROLLING_SUMMARY_WORD_THRESHOLD) {
       try {
-        meeting_summary = await compressOlder({ groq, olderText });
+        meeting_summary = await compressOlder({
+          groq,
+          olderText,
+          systemPrompt: summaryPrompt,
+        });
       } catch (err) {
         // Fall back to truncated raw text if summary call fails — never block
         // the primary suggestion call on a summary failure.

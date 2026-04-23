@@ -46,6 +46,7 @@ interface SuggestionsRequestBody {
   meetingStartTime?: string | null;
   settings?: {
     suggestionPrompt?: string;
+    rollingSummaryPrompt?: string;
     suggestionContextWindow?: number;
     suggestionTemperature?: number;
   };
@@ -214,6 +215,8 @@ export async function POST(req: NextRequest) {
     const temperature = settings?.suggestionTemperature ?? 0.7;
     const systemPrompt =
       settings?.suggestionPrompt?.trim() || DEFAULT_SUGGESTION_PROMPT;
+    const rollingSummaryPrompt =
+      settings?.rollingSummaryPrompt?.trim() || undefined;
 
     const groq = createGroqClient(apiKey);
 
@@ -222,6 +225,7 @@ export async function POST(req: NextRequest) {
       windowWords,
       meetingStartTime: meetingStartTime ?? null,
       groq,
+      rollingSummaryPrompt,
     });
 
     const userPrompt = renderContextForPrompt(context);
