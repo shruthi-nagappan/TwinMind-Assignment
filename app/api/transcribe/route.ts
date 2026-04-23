@@ -6,40 +6,31 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 /**
- * Whisper (all sizes) has a well-known failure mode where it hallucinates
- * common YouTube-caption phrases when fed silent or near-silent audio. The
- * client-side silence detector drops most of these before they reach us, but
- * chunks with a few seconds of speech surrounded by silence can still slip
- * through and produce pure hallucinations. This set catches the worst
- * offenders; matched outputs are treated as silence.
+ * Whisper hallucinates YouTube-caption boilerplate when fed silent audio.
+ * Client-side silence detection already drops silent chunks, so we only
+ * filter the *unambiguous* hallucinations here — phrases that would never
+ * be the entire content of a meeting chunk. We deliberately do NOT filter
+ * normal short utterances like "thank you", "okay", "bye", "hmm" since
+ * those are perfectly valid in real conversation.
  */
-const WHISPER_HALLUCINATION_PATTERNS = new Set<string>([
+const HALLUCINATION_EXACT_MATCHES = new Set<string>([
   "you",
   "you you",
-  "thank you",
-  "thanks",
+  "you you you",
+  ".",
+  "...",
+]);
+
+const HALLUCINATION_SUBSTRINGS = [
   "thanks for watching",
   "thank you for watching",
-  "please subscribe",
   "please like and subscribe",
   "like and subscribe",
-  "subscribe",
-  "bye",
-  "bye bye",
-  "goodbye",
-  "ok",
-  "okay",
-  "hmm",
-  "uh",
-  "um",
-  "mhm",
-  "it's free",
-  "its free",
-  "what am i getting on it",
+  "don't forget to subscribe",
+  "subscribe to the channel",
+  "see you in the next video",
   "see you next time",
-  "see you",
-  "cheers",
-]);
+];
 
 function isLikelyHallucination(text: string): boolean {
   const normalized = text
@@ -48,13 +39,9 @@ function isLikelyHallucination(text: string): boolean {
     .replace(/[.!?,;:\u2026]+$/g, "")
     .replace(/\s+/g, " ");
   if (!normalized) return true;
-  if (WHISPER_HALLUCINATION_PATTERNS.has(normalized)) return true;
-
-  // Single very-short utterance that's a known filler — drop it. Longer
-  // phrases containing real speech are kept as-is.
-  const words = normalized.split(" ");
-  if (words.length <= 4 && WHISPER_HALLUCINATION_PATTERNS.has(words.join(" "))) {
-    return true;
+  if (HALLUCINATION_EXACT_MATCHES.has(normalized)) return true;
+  for (const needle of HALLUCINATION_SUBSTRINGS) {
+    if (normalized.includes(needle)) return true;
   }
   return false;
 }

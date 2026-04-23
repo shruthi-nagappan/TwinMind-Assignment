@@ -67,6 +67,7 @@ export interface AppSettings {
   suggestionPrompt: string;
   detailedAnswerPrompt: string;
   chatSystemPrompt: string;
+  rollingSummaryPrompt: string;
   suggestionContextWindow: number;
   expandedContextWindow: number;
   suggestionTemperature: number;

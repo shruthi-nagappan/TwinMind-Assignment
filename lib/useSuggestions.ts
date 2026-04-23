@@ -160,6 +160,7 @@ export function useSuggestions({
           meetingStartTime: meetingStartRef.current,
           settings: {
             suggestionPrompt: s.suggestionPrompt,
+            rollingSummaryPrompt: s.rollingSummaryPrompt,
             suggestionContextWindow: s.suggestionContextWindow,
             suggestionTemperature: s.suggestionTemperature,
           },

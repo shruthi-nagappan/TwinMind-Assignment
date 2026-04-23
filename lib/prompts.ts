@@ -110,6 +110,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   suggestionPrompt: DEFAULT_SUGGESTION_PROMPT,
   detailedAnswerPrompt: DEFAULT_DETAILED_ANSWER_PROMPT,
   chatSystemPrompt: DEFAULT_CHAT_SYSTEM_PROMPT,
+  rollingSummaryPrompt: DEFAULT_ROLLING_SUMMARY_PROMPT,
   suggestionContextWindow: 1500,
   expandedContextWindow: 4000,
   suggestionTemperature: 0.7,
