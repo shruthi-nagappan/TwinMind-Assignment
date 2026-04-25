@@ -37,6 +37,10 @@ const FIXTURE_SELECT_OPTIONS = MEETING_SESSION_FIXTURES.map((f) => ({
   label: f.label,
 }));
 
+/** QA fixtures (Day 8) — opt-in via `.env.local`: `NEXT_PUBLIC_SHOW_QA_FIXTURES=true` */
+const SHOW_QA_FIXTURES =
+  process.env.NEXT_PUBLIC_SHOW_QA_FIXTURES === "true";
+
 function formatClockTime(d: Date = new Date()): string {
   return d.toLocaleTimeString("en-US", {
     hour: "2-digit",
@@ -326,8 +330,8 @@ export default function Home() {
               ? undefined
               : "Record, generate suggestions, or chat first."
           }
-          fixtureOptions={FIXTURE_SELECT_OPTIONS}
-          onLoadFixture={handleLoadFixture}
+          fixtureOptions={SHOW_QA_FIXTURES ? FIXTURE_SELECT_OPTIONS : undefined}
+          onLoadFixture={SHOW_QA_FIXTURES ? handleLoadFixture : undefined}
           onImportSessionJson={handleImportSessionJson}
           onNewMeeting={handleNewMeeting}
           newMeetingEnabled={canStartFreshMeeting}
