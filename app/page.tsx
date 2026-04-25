@@ -61,6 +61,9 @@ export default function Home() {
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const [meetingStartTime, setMeetingStartTime] = useState<string | null>(null);
 
+  /** Bumped on “new meeting” / fixture / import so late transcribe chunks cannot append. */
+  const transcriptEpochRef = useRef(0);
+
   const apiKeyRef = useRef(apiKey);
   useEffect(() => {
     apiKeyRef.current = apiKey;
@@ -129,16 +132,21 @@ export default function Home() {
       const text = (data.text || "").trim();
       if (!text) return;
 
-      setTranscript((prev) => [
-        ...prev,
-        {
-          id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          text,
-          timestamp,
-          wordCount: countWords(text),
-        },
-      ]);
-      setMeetingStartTime((prev) => prev ?? new Date().toISOString());
+      const epochAtSuccess = transcriptEpochRef.current;
+      const newChunk: TranscriptChunk = {
+        id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        text,
+        timestamp,
+        wordCount: countWords(text),
+      };
+      setTranscript((prev) => {
+        if (transcriptEpochRef.current !== epochAtSuccess) return prev;
+        return [...prev, newChunk];
+      });
+      setMeetingStartTime((prev) => {
+        if (transcriptEpochRef.current !== epochAtSuccess) return prev;
+        return prev ?? new Date().toISOString();
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Transcription failed";
       setTranscriptError(msg);
@@ -210,6 +218,7 @@ export default function Home() {
     (fixtureId: string) => {
       const fixture = getFixtureById(fixtureId);
       if (!fixture) return;
+      transcriptEpochRef.current += 1;
       if (recorder.isRecording) recorder.stop();
       suggestions.clearAll();
       chat.clear();
@@ -230,6 +239,7 @@ export default function Home() {
         setTranscriptError(result.error);
         return;
       }
+      transcriptEpochRef.current += 1;
       if (recorder.isRecording) recorder.stop();
       setTranscriptError(null);
       const { session } = result;
@@ -254,6 +264,24 @@ export default function Home() {
     transcript.length > 0 ||
     suggestions.batches.length > 0 ||
     chat.messages.length > 0;
+
+  const canStartFreshMeeting =
+    recorder.isRecording ||
+    transcribingCount > 0 ||
+    transcript.length > 0 ||
+    suggestions.batches.length > 0 ||
+    chat.messages.length > 0 ||
+    meetingStartTime != null;
+
+  const handleNewMeeting = useCallback(() => {
+    transcriptEpochRef.current += 1;
+    if (recorder.isRecording) recorder.stop();
+    suggestions.clearAll();
+    chat.clear();
+    setTranscript([]);
+    setMeetingStartTime(null);
+    setTranscriptError(null);
+  }, [recorder, suggestions, chat]);
 
   const canRecord = Boolean(apiKey);
 
@@ -301,6 +329,8 @@ export default function Home() {
           fixtureOptions={FIXTURE_SELECT_OPTIONS}
           onLoadFixture={handleLoadFixture}
           onImportSessionJson={handleImportSessionJson}
+          onNewMeeting={handleNewMeeting}
+          newMeetingEnabled={canStartFreshMeeting}
         />
         <SuggestionsColumn
           batches={suggestions.batches}
@@ -395,6 +425,8 @@ function TranscriptColumn({
   fixtureOptions,
   onLoadFixture,
   onImportSessionJson,
+  onNewMeeting,
+  newMeetingEnabled = false,
 }: {
   transcript: TranscriptChunk[];
   isRecording: boolean;
@@ -410,6 +442,8 @@ function TranscriptColumn({
   fixtureOptions?: { id: string; label: string }[];
   onLoadFixture?: (fixtureId: string) => void;
   onImportSessionJson?: (jsonText: string) => void;
+  onNewMeeting?: () => void;
+  newMeetingEnabled?: boolean;
 }) {
   return (
     <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-xl shadow-black/40">
@@ -434,6 +468,8 @@ function TranscriptColumn({
         fixtureOptions={fixtureOptions}
         onLoadFixture={onLoadFixture}
         onImportSessionJson={onImportSessionJson}
+        onNewMeeting={onNewMeeting}
+        newMeetingEnabled={newMeetingEnabled}
       />
     </section>
   );
