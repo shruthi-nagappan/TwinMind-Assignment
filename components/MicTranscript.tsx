@@ -12,6 +12,12 @@ interface MicTranscriptProps {
   onDismissError: () => void;
   disabled?: boolean;
   disabledReason?: string;
+  onExportSession?: () => void;
+  exportEnabled?: boolean;
+  exportDisabledReason?: string;
+  /** Day 8 — canned transcripts for prompt QA without recording. */
+  fixtureOptions?: { id: string; label: string }[];
+  onLoadFixture?: (fixtureId: string) => void;
 }
 
 export default function MicTranscript({
@@ -23,6 +29,11 @@ export default function MicTranscript({
   onDismissError,
   disabled,
   disabledReason,
+  onExportSession,
+  exportEnabled = false,
+  exportDisabledReason,
+  fixtureOptions,
+  onLoadFixture,
 }: MicTranscriptProps) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -104,8 +115,81 @@ export default function MicTranscript({
       <div className="mx-6 mt-4 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel-soft)] px-4 py-3 text-[13px] leading-relaxed text-[var(--text-secondary)]">
         The transcript scrolls and appends new chunks every ~30 seconds while
         recording. Use the mic button to start/stop. Each chunk is transcribed
-        independently via Whisper Large V3.
+        independently via Whisper Large V3. Export downloads transcript,
+        suggestion batches, chat, and settings as one JSON file.
       </div>
+
+      {onExportSession && (
+        <div className="mx-6 mt-3 flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={onExportSession}
+              disabled={!exportEnabled}
+              title={
+                !exportEnabled
+                  ? exportDisabledReason ?? "Nothing to export yet"
+                  : "Download twinmind-session-….json"
+              }
+              className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-1.5 text-[12px] font-medium text-[var(--text-primary)] transition hover:border-[var(--accent-teal-dim)] hover:bg-teal-500/5 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="14"
+                height="14"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth="2"
+                aria-hidden
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 10l5 5m0 0 5-5m-5 5V4"
+                />
+              </svg>
+              Export session (JSON)
+            </button>
+            {!exportEnabled && exportDisabledReason && (
+              <span className="text-[11px] text-[var(--text-muted)]">
+                {exportDisabledReason}
+              </span>
+            )}
+          </div>
+          {fixtureOptions &&
+            fixtureOptions.length > 0 &&
+            onLoadFixture && (
+              <div className="flex flex-wrap items-center gap-2">
+                <label
+                  htmlFor="twinmind-fixture-select"
+                  className="text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--text-muted)]"
+                >
+                  QA fixture
+                </label>
+                <select
+                  id="twinmind-fixture-select"
+                  defaultValue=""
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    if (id) {
+                      onLoadFixture(id);
+                      e.target.value = "";
+                    }
+                  }}
+                  className="max-w-[min(100%,16rem)] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 py-1 text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--accent-teal-dim)]"
+                >
+                  <option value="">Load canned transcript…</option>
+                  {fixtureOptions.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+        </div>
+      )}
 
       <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
         {transcript.length === 0 && !isRecording && (

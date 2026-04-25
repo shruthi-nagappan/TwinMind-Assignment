@@ -7,6 +7,11 @@ import AppHeader from "@/components/AppHeader";
 import MicTranscript from "@/components/MicTranscript";
 import SettingsModal from "@/components/SettingsModal";
 import SuggestionCard from "@/components/SuggestionCard";
+import { buildSessionExport, downloadSessionJson } from "@/lib/exportSession";
+import {
+  getFixtureById,
+  MEETING_SESSION_FIXTURES,
+} from "@/lib/meetingSessionFixtures";
 import { DEFAULT_SETTINGS, SUGGESTION_TYPE_META } from "@/lib/prompts";
 import { useMicRecorder } from "@/lib/useMicRecorder";
 import { useSuggestions } from "@/lib/useSuggestions";
@@ -22,6 +27,11 @@ import type {
 
 const API_KEY_STORAGE = "twinmind.groq_api_key";
 const SETTINGS_STORAGE = "twinmind.settings";
+
+const FIXTURE_SELECT_OPTIONS = MEETING_SESSION_FIXTURES.map((f) => ({
+  id: f.id,
+  label: f.label,
+}));
 
 function formatClockTime(d: Date = new Date()): string {
   return d.toLocaleTimeString("en-US", {
@@ -174,6 +184,45 @@ export default function Home() {
     [chat],
   );
 
+  const handleExportSession = useCallback(() => {
+    const payload = buildSessionExport({
+      transcript,
+      suggestionBatches: suggestions.batches,
+      chatMessages: chat.messages,
+      meetingStartTime,
+      settings,
+    });
+    downloadSessionJson(payload);
+  }, [
+    transcript,
+    suggestions.batches,
+    chat.messages,
+    meetingStartTime,
+    settings,
+  ]);
+
+  /** Day 8 — load canned transcript for `/api/suggestions` QA without the mic. */
+  const handleLoadFixture = useCallback(
+    (fixtureId: string) => {
+      const fixture = getFixtureById(fixtureId);
+      if (!fixture) return;
+      if (recorder.isRecording) recorder.stop();
+      suggestions.clearAll();
+      chat.clear();
+      setTranscriptError(null);
+      setTranscript(fixture.chunks.map((c) => ({ ...c })));
+      setMeetingStartTime((prev) =>
+        prev ?? new Date(Date.now() - 12 * 60 * 1000).toISOString(),
+      );
+    },
+    [recorder, suggestions, chat],
+  );
+
+  const canExportSession =
+    transcript.length > 0 ||
+    suggestions.batches.length > 0 ||
+    chat.messages.length > 0;
+
   const canRecord = Boolean(apiKey);
 
   async function handleToggleRecord() {
@@ -210,6 +259,15 @@ export default function Home() {
               ? "Paste your Groq API key in Settings to enable recording."
               : undefined
           }
+          onExportSession={handleExportSession}
+          exportEnabled={canExportSession}
+          exportDisabledReason={
+            canExportSession
+              ? undefined
+              : "Record, generate suggestions, or chat first."
+          }
+          fixtureOptions={FIXTURE_SELECT_OPTIONS}
+          onLoadFixture={handleLoadFixture}
         />
         <SuggestionsColumn
           batches={suggestions.batches}
@@ -298,6 +356,11 @@ function TranscriptColumn({
   onDismissError,
   disabled,
   disabledReason,
+  onExportSession,
+  exportEnabled,
+  exportDisabledReason,
+  fixtureOptions,
+  onLoadFixture,
 }: {
   transcript: TranscriptChunk[];
   isRecording: boolean;
@@ -307,6 +370,11 @@ function TranscriptColumn({
   onDismissError: () => void;
   disabled?: boolean;
   disabledReason?: string;
+  onExportSession?: () => void;
+  exportEnabled?: boolean;
+  exportDisabledReason?: string;
+  fixtureOptions?: { id: string; label: string }[];
+  onLoadFixture?: (fixtureId: string) => void;
 }) {
   return (
     <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-xl shadow-black/40">
@@ -325,6 +393,11 @@ function TranscriptColumn({
         onDismissError={onDismissError}
         disabled={disabled}
         disabledReason={disabledReason}
+        onExportSession={onExportSession}
+        exportEnabled={exportEnabled}
+        exportDisabledReason={exportDisabledReason}
+        fixtureOptions={fixtureOptions}
+        onLoadFixture={onLoadFixture}
       />
     </section>
   );
