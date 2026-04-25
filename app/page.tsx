@@ -7,7 +7,11 @@ import AppHeader from "@/components/AppHeader";
 import MicTranscript from "@/components/MicTranscript";
 import SettingsModal from "@/components/SettingsModal";
 import SuggestionCard from "@/components/SuggestionCard";
-import { buildSessionExport, downloadSessionJson } from "@/lib/exportSession";
+import {
+  buildSessionExport,
+  downloadSessionJson,
+  parseSessionImportJson,
+} from "@/lib/exportSession";
 import {
   getFixtureById,
   MEETING_SESSION_FIXTURES,
@@ -218,6 +222,34 @@ export default function Home() {
     [recorder, suggestions, chat],
   );
 
+  /** Day 9 — restore transcript, suggestions, chat, and optional settings from export JSON. */
+  const handleImportSessionJson = useCallback(
+    (raw: string) => {
+      const result = parseSessionImportJson(raw);
+      if (!result.ok) {
+        setTranscriptError(result.error);
+        return;
+      }
+      if (recorder.isRecording) recorder.stop();
+      setTranscriptError(null);
+      const { session } = result;
+      setTranscript(session.transcript.map((c) => ({ ...c })));
+      setMeetingStartTime(session.meetingStartTime);
+      suggestions.hydrateBatches(session.suggestionBatches);
+      chat.hydrateMessages(session.chatMessages);
+      if (session.settings) {
+        const next = { ...DEFAULT_SETTINGS, ...session.settings };
+        setSettings(next);
+        try {
+          sessionStorage.setItem(SETTINGS_STORAGE, JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+      }
+    },
+    [recorder, suggestions, chat],
+  );
+
   const canExportSession =
     transcript.length > 0 ||
     suggestions.batches.length > 0 ||
@@ -268,6 +300,7 @@ export default function Home() {
           }
           fixtureOptions={FIXTURE_SELECT_OPTIONS}
           onLoadFixture={handleLoadFixture}
+          onImportSessionJson={handleImportSessionJson}
         />
         <SuggestionsColumn
           batches={suggestions.batches}
@@ -361,6 +394,7 @@ function TranscriptColumn({
   exportDisabledReason,
   fixtureOptions,
   onLoadFixture,
+  onImportSessionJson,
 }: {
   transcript: TranscriptChunk[];
   isRecording: boolean;
@@ -375,6 +409,7 @@ function TranscriptColumn({
   exportDisabledReason?: string;
   fixtureOptions?: { id: string; label: string }[];
   onLoadFixture?: (fixtureId: string) => void;
+  onImportSessionJson?: (jsonText: string) => void;
 }) {
   return (
     <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-xl shadow-black/40">
@@ -398,6 +433,7 @@ function TranscriptColumn({
         exportDisabledReason={exportDisabledReason}
         fixtureOptions={fixtureOptions}
         onLoadFixture={onLoadFixture}
+        onImportSessionJson={onImportSessionJson}
       />
     </section>
   );

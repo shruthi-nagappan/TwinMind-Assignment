@@ -28,6 +28,8 @@ export interface UseSuggestionsResult {
   refresh: (opts?: { force?: boolean }) => Promise<void>;
   clearError: () => void;
   clearAll: () => void;
+  /** Day 9 — restore batches from an imported session export. */
+  hydrateBatches: (batches: SuggestionBatch[]) => void;
 }
 
 /** Minimum transcript words before the first auto-batch fires. ~8s of speech. */
@@ -204,6 +206,17 @@ export function useSuggestions({
     setError(null);
   }, []);
 
+  const hydrateBatches = useCallback((next: SuggestionBatch[]) => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    inFlightRef.current = false;
+    setIsLoading(false);
+    setError(null);
+    setBatches(next.slice(0, BATCHES_MAX_HISTORY));
+    setLastRefreshedAt(null);
+    lastAttemptAtRef.current = Date.now();
+  }, []);
+
   // Kickstart: when we first have meaningful transcript content and no
   // batches yet, fire immediately so the user isn't waiting the full
   // interval for their first suggestions.
@@ -250,5 +263,6 @@ export function useSuggestions({
     refresh,
     clearError,
     clearAll,
+    hydrateBatches,
   };
 }

@@ -18,6 +18,8 @@ interface MicTranscriptProps {
   /** Day 8 — canned transcripts for prompt QA without recording. */
   fixtureOptions?: { id: string; label: string }[];
   onLoadFixture?: (fixtureId: string) => void;
+  /** Day 9 — raw JSON text from a prior export file. */
+  onImportSessionJson?: (jsonText: string) => void;
 }
 
 export default function MicTranscript({
@@ -34,8 +36,10 @@ export default function MicTranscript({
   exportDisabledReason,
   fixtureOptions,
   onLoadFixture,
+  onImportSessionJson,
 }: MicTranscriptProps) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -116,42 +120,89 @@ export default function MicTranscript({
         The transcript scrolls and appends new chunks every ~30 seconds while
         recording. Use the mic button to start/stop. Each chunk is transcribed
         independently via Whisper Large V3. Export downloads transcript,
-        suggestion batches, chat, and settings as one JSON file.
+        suggestion batches, chat, and settings as one JSON file; import loads
+        them back for review or continued QA.
       </div>
 
-      {onExportSession && (
+      {(onExportSession || onImportSessionJson) && (
         <div className="mx-6 mt-3 flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={onExportSession}
-              disabled={!exportEnabled}
-              title={
-                !exportEnabled
-                  ? exportDisabledReason ?? "Nothing to export yet"
-                  : "Download twinmind-session-….json"
-              }
-              className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-1.5 text-[12px] font-medium text-[var(--text-primary)] transition hover:border-[var(--accent-teal-dim)] hover:bg-teal-500/5 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="14"
-                height="14"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth="2"
-                aria-hidden
+            {onExportSession && (
+              <button
+                type="button"
+                onClick={onExportSession}
+                disabled={!exportEnabled}
+                title={
+                  !exportEnabled
+                    ? exportDisabledReason ?? "Nothing to export yet"
+                    : "Download twinmind-session-….json"
+                }
+                className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-1.5 text-[12px] font-medium text-[var(--text-primary)] transition hover:border-[var(--accent-teal-dim)] hover:bg-teal-500/5 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 10l5 5m0 0 5-5m-5 5V4"
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  aria-hidden
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2M7 10l5 5m0 0 5-5m-5 5V4"
+                  />
+                </svg>
+                Export session (JSON)
+              </button>
+            )}
+            {onImportSessionJson && (
+              <>
+                <input
+                  ref={importInputRef}
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  aria-hidden
+                  onChange={(e) => {
+                    const input = e.target;
+                    const file = input.files?.[0];
+                    input.value = "";
+                    if (!file) return;
+                    void file.text().then((text) => {
+                      onImportSessionJson(text);
+                    });
+                  }}
                 />
-              </svg>
-              Export session (JSON)
-            </button>
-            {!exportEnabled && exportDisabledReason && (
+                <button
+                  type="button"
+                  onClick={() => importInputRef.current?.click()}
+                  title="Restore a session from a TwinMind JSON export"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-1.5 text-[12px] font-medium text-[var(--text-primary)] transition hover:border-[var(--accent-teal-dim)] hover:bg-teal-500/5"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    aria-hidden
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M8 10l4-4 4 4M12 6v13M5 19h14"
+                    />
+                  </svg>
+                  Import session (JSON)
+                </button>
+              </>
+            )}
+            {onExportSession && !exportEnabled && exportDisabledReason && (
               <span className="text-[11px] text-[var(--text-muted)]">
                 {exportDisabledReason}
               </span>
