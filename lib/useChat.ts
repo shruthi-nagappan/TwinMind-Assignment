@@ -31,6 +31,8 @@ export interface UseChatResult {
   abort: () => void;
   clear: () => void;
   clearError: () => void;
+  /** Day 9 — restore chat from an imported session export. */
+  hydrateMessages: (messages: ChatMessage[]) => void;
 }
 
 function formatClockTime(d: Date = new Date()): string {
@@ -249,6 +251,14 @@ export function useChat({
 
   const clearError = useCallback(() => setError(null), []);
 
+  const hydrateMessages = useCallback((next: ChatMessage[]) => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStreamingAssistantId(null);
+    setMessages(next);
+    setError(null);
+  }, []);
+
   return {
     messages,
     streamingAssistantId,
@@ -259,5 +269,6 @@ export function useChat({
     abort,
     clear,
     clearError,
+    hydrateMessages,
   };
 }
