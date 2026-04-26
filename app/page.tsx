@@ -89,6 +89,10 @@ export default function Home() {
 
   /** Bumped on “new meeting” / fixture / import so late transcribe chunks cannot append. */
   const transcriptEpochRef = useRef(0);
+  /** In-flight Whisper requests (incremented with transcribingCount) for manual refresh wait. */
+  const transcribingInFlightRef = useRef(0);
+  const [manualRefreshBusy, setManualRefreshBusy] = useState(false);
+  const manualRefreshBusyRef = useRef(false);
 
   const apiKeyRef = useRef(apiKey);
   useEffect(() => {
@@ -152,6 +156,7 @@ export default function Home() {
       return;
     }
 
+    transcribingInFlightRef.current += 1;
     setTranscribingCount((c) => c + 1);
     const timestamp = formatClockTime();
 
@@ -193,6 +198,10 @@ export default function Home() {
       const msg = err instanceof Error ? err.message : "Transcription failed";
       setTranscriptError(msg);
     } finally {
+      transcribingInFlightRef.current = Math.max(
+        0,
+        transcribingInFlightRef.current - 1,
+      );
       setTranscribingCount((c) => Math.max(0, c - 1));
     }
   }, []);
@@ -230,6 +239,34 @@ export default function Home() {
     apiKey,
     settings,
   });
+
+  /** Assignment: manually update transcript (flush current audio → Whisper) then suggestions. */
+  const handleReloadTranscriptThenSuggestions = useCallback(async () => {
+    if (manualRefreshBusyRef.current) return;
+    manualRefreshBusyRef.current = true;
+    setManualRefreshBusy(true);
+    try {
+      if (recorder.isRecording) {
+        recorder.flushChunk();
+        // Yield until Whisper starts (or timeout) so we don’t refresh before the flushed blob is in flight.
+        const waitChunkStart = Date.now();
+        while (
+          transcribingInFlightRef.current === 0 &&
+          Date.now() - waitChunkStart < 2500
+        ) {
+          await new Promise((r) => setTimeout(r, 25));
+        }
+      }
+      const deadline = Date.now() + 90_000;
+      while (transcribingInFlightRef.current > 0 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 40));
+      }
+      await suggestions.refresh({ force: true });
+    } finally {
+      manualRefreshBusyRef.current = false;
+      setManualRefreshBusy(false);
+    }
+  }, [recorder, suggestions]);
 
   const applySessionFromExport = useCallback(
     (session: SessionExport) => {
@@ -432,12 +469,13 @@ export default function Home() {
         />
         <SuggestionsColumn
           batches={suggestions.batches}
-          isLoading={suggestions.isLoading}
+          isLoading={suggestions.isLoading || manualRefreshBusy}
           error={suggestions.error}
           nextRefreshInSeconds={suggestions.nextRefreshInSeconds}
           transcriptHasContent={transcript.length > 0}
+          isRecording={recorder.isRecording}
           apiKeySet={Boolean(apiKey)}
-          onReload={() => suggestions.refresh({ force: true })}
+          onReload={handleReloadTranscriptThenSuggestions}
           onDismissError={suggestions.clearError}
           onSuggestionClick={handleExpandSuggestion}
         />
@@ -619,6 +657,7 @@ function SuggestionsColumn({
   error,
   nextRefreshInSeconds,
   transcriptHasContent,
+  isRecording,
   apiKeySet,
   onReload,
   onDismissError,
@@ -629,22 +668,26 @@ function SuggestionsColumn({
   error: string | null;
   nextRefreshInSeconds: number | null;
   transcriptHasContent: boolean;
+  isRecording: boolean;
   apiKeySet: boolean;
-  onReload: () => void;
+  onReload: () => void | Promise<void>;
   onDismissError: () => void;
   onSuggestionClick?: (s: Suggestion) => void;
 }) {
   const totalBatches = batches.length;
   const latestMeetingType = batches[0]?.meetingType;
-  const canReload = !isLoading && transcriptHasContent && apiKeySet;
+  const canReload =
+    !isLoading &&
+    apiKeySet &&
+    (transcriptHasContent || isRecording);
 
   const refreshHint =
     !apiKeySet
       ? "API key required"
-      : !transcriptHasContent
-        ? "Start recording"
+      : !transcriptHasContent && !isRecording
+        ? "Start recording or import a session"
         : isLoading
-          ? "Generating…"
+          ? "Updating…"
           : nextRefreshInSeconds != null
             ? `Next auto-refresh in ${nextRefreshInSeconds}s`
             : "Auto-refresh paused";
@@ -663,8 +706,10 @@ function SuggestionsColumn({
       />
       <div className="flex items-center justify-between px-6 pt-4">
         <button
-          onClick={onReload}
+          type="button"
+          onClick={() => void onReload()}
           disabled={!canReload}
+          title="Ends the current mic chunk (if recording), waits for Whisper, then fetches 3 new suggestions"
           className="inline-flex items-center gap-1.5 rounded-md border border-[var(--accent-teal-dim)] bg-transparent px-3 py-1.5 text-[13px] font-medium text-[var(--accent-teal)] transition hover:bg-teal-500/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
         >
           <svg
@@ -683,7 +728,7 @@ function SuggestionsColumn({
               d="M4 4v6h6M20 20v-6h-6M4 10a8 8 0 0 1 14.32-4.9M20 14a8 8 0 0 1-14.32 4.9"
             />
           </svg>
-          {isLoading ? "Reloading…" : "Reload suggestions"}
+          {isLoading ? "Updating…" : "Refresh transcript & suggestions"}
         </button>
         <span className="text-[12px] text-[var(--text-muted)]">
           {refreshHint}

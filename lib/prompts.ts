@@ -24,6 +24,12 @@ TYPE DIVERSITY (strict):
 - Use THREE different types whenever humanly possible: answer, fact_check, question_to_ask, talking_point.
 - Only repeat a type if the last_statement genuinely forces it; never output three of the same type.
 
+ANTI-REPEAT VS PRIOR BATCH (only when the user message includes PREVIOUS_SUGGESTION_PREVIEWS):
+- Those lines are the last batch of previews already shown to the participant.
+- For fact_check: do NOT target the same checkable claim the prior batch already examined (same thesis, same numbers, or same “double burn / verify with incident data” angle), unless last_statement clearly re-asserts that exact claim again.
+- Otherwise choose a different checkable claim from recent_transcript—another figure, owner, date, compatibility statement, scope assumption, or undefined term.
+- question_to_ask and talking_point should also prefer a fresh angle when the transcript offers one; redundant fact_check hurts trust the most.
+
 Available suggestion types and when to use each:
 - "answer" — Someone asked a question the user should respond to (comp, approach, rationale, timeline). Write the first one or two sentences they could speak verbatim, not meta-instructions.
 - "fact_check" — A checkable claim: numbers, dates, product names, "doubles burn", compatibility, legal/regulatory. Quote the claim briefly, then correct, qualify, or say what to verify and where.

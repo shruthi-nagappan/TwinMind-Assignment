@@ -151,6 +151,12 @@ export function useSuggestions({
     abortRef.current = ac;
 
     try {
+      const prior = batchesRef.current[0]?.suggestions;
+      const previousSuggestionPreviews =
+        prior && prior.length > 0
+          ? prior.map((x) => `${x.type}: ${x.preview}`)
+          : undefined;
+
       const res = await fetch("/api/suggestions", {
         method: "POST",
         headers: {
@@ -160,6 +166,9 @@ export function useSuggestions({
         body: JSON.stringify({
           transcript: chunks,
           meetingStartTime: meetingStartRef.current,
+          ...(previousSuggestionPreviews
+            ? { previousSuggestionPreviews }
+            : {}),
           settings: {
             suggestionPrompt: s.suggestionPrompt,
             rollingSummaryPrompt: s.rollingSummaryPrompt,
