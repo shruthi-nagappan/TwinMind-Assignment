@@ -44,6 +44,8 @@ const VALID_MEETING_TYPES = new Set<MeetingType>([
 interface SuggestionsRequestBody {
   transcript?: TranscriptChunk[];
   meetingStartTime?: string | null;
+  /** `type: preview` lines from the batch shown before this request (newest batch). */
+  previousSuggestionPreviews?: string[];
   settings?: {
     suggestionPrompt?: string;
     rollingSummaryPrompt?: string;
@@ -226,7 +228,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { transcript, meetingStartTime, settings } = body;
+    const { transcript, meetingStartTime, settings, previousSuggestionPreviews } =
+      body;
 
     if (!Array.isArray(transcript) || transcript.length === 0) {
       return NextResponse.json(
@@ -264,7 +267,18 @@ export async function POST(req: NextRequest) {
       rollingSummaryPrompt,
     });
 
-    const userPrompt = renderContextForPrompt(context);
+    const prevLines =
+      Array.isArray(previousSuggestionPreviews) &&
+      previousSuggestionPreviews.length > 0
+        ? previousSuggestionPreviews
+            .map((s) => (typeof s === "string" ? s.trim() : ""))
+            .filter(Boolean)
+            .slice(0, 6)
+        : undefined;
+
+    const userPrompt = renderContextForPrompt(context, {
+      previousSuggestionPreviews: prevLines,
+    });
 
     // First attempt.
     let rawContent = "";

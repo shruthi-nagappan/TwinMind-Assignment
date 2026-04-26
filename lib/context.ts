@@ -158,11 +158,19 @@ export async function buildSuggestionContext({
   };
 }
 
+export interface RenderContextOptions {
+  /** One line per prior suggestion: `type: preview` — avoids repeated fact_check targets. */
+  previousSuggestionPreviews?: string[];
+}
+
 /**
  * Render the SuggestionContext as the user-message input for the suggestion
  * prompt. Keeping this as its own function lets us A/B-test format variants.
  */
-export function renderContextForPrompt(ctx: SuggestionContext): string {
+export function renderContextForPrompt(
+  ctx: SuggestionContext,
+  opts?: RenderContextOptions,
+): string {
   const parts: string[] = [];
   parts.push("MEETING_CONTEXT:");
   parts.push(`  detected_type: ${ctx.meeting_context.detected_type}`);
@@ -179,6 +187,17 @@ export function renderContextForPrompt(ctx: SuggestionContext): string {
   parts.push("RECENT_TRANSCRIPT (verbatim):");
   parts.push(ctx.recent_transcript || "(no recent transcript)");
   parts.push("");
+
+  const prev = opts?.previousSuggestionPreviews?.filter((s) => s.trim());
+  if (prev && prev.length > 0) {
+    parts.push(
+      "PREVIOUS_SUGGESTION_PREVIEWS (last batch already shown — follow ANTI-REPEAT rules in system prompt):",
+    );
+    for (const line of prev) {
+      parts.push(`  ${line}`);
+    }
+    parts.push("");
+  }
 
   parts.push("LAST_STATEMENT (most recent utterance — primary signal):");
   parts.push(ctx.last_statement || "(silence / no clear last statement)");
