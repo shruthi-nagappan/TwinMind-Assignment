@@ -1,4 +1,4 @@
-# TwinMind — Live meeting copilot (take-home)
+# TwinMind — Live meeting copilot
 
 ## What this is
 
