@@ -2,6 +2,7 @@
  * Day 7 — session export: download transcript, suggestion batches, chat, and
  * optional settings as one JSON file for debugging or archival.
  * Day 9 — `parseSessionImportJson` validates the same shape for UI import.
+ * Day 10 — same payload is autosaved to `localStorage` as a recoverable draft.
  */
 import type {
   AppSettings,

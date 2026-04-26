@@ -11,7 +11,13 @@ import {
   buildSessionExport,
   downloadSessionJson,
   parseSessionImportJson,
+  type SessionExport,
 } from "@/lib/exportSession";
+import {
+  clearDraftSession,
+  readDraftSessionJson,
+  writeDraftSessionJson,
+} from "@/lib/draftSession";
 import {
   getFixtureById,
   MEETING_SESSION_FIXTURES,
@@ -37,6 +43,10 @@ const FIXTURE_SELECT_OPTIONS = MEETING_SESSION_FIXTURES.map((f) => ({
   label: f.label,
 }));
 
+/** QA fixtures (Day 8) — opt-in via `.env.local`: `NEXT_PUBLIC_SHOW_QA_FIXTURES=true` */
+const SHOW_QA_FIXTURES =
+  process.env.NEXT_PUBLIC_SHOW_QA_FIXTURES === "true";
+
 function formatClockTime(d: Date = new Date()): string {
   return d.toLocaleTimeString("en-US", {
     hour: "2-digit",
@@ -51,6 +61,20 @@ function countWords(s: string): number {
   return trimmed ? trimmed.split(/\s+/).length : 0;
 }
 
+function formatDraftBannerTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+function draftSessionHasContent(session: SessionExport): boolean {
+  return (
+    session.transcript.length > 0 ||
+    session.suggestionBatches.length > 0 ||
+    session.chatMessages.length > 0
+  );
+}
+
 export default function Home() {
   const [apiKey, setApiKey] = useState("");
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
@@ -60,6 +84,11 @@ export default function Home() {
   const [transcribingCount, setTranscribingCount] = useState(0);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const [meetingStartTime, setMeetingStartTime] = useState<string | null>(null);
+  const [pendingDraftSession, setPendingDraftSession] =
+    useState<SessionExport | null>(null);
+
+  /** Bumped on “new meeting” / fixture / import so late transcribe chunks cannot append. */
+  const transcriptEpochRef = useRef(0);
 
   const apiKeyRef = useRef(apiKey);
   useEffect(() => {
@@ -77,6 +106,22 @@ export default function Home() {
     } catch {
       // ignore
     }
+  }, []);
+
+  /** Day 10 — offer recovery of last autosaved session (e.g. after refresh). */
+  useEffect(() => {
+    const raw = readDraftSessionJson();
+    if (!raw?.trim()) return;
+    const result = parseSessionImportJson(raw);
+    if (!result.ok) {
+      clearDraftSession();
+      return;
+    }
+    if (!draftSessionHasContent(result.session)) {
+      clearDraftSession();
+      return;
+    }
+    setPendingDraftSession(result.session);
   }, []);
 
   function handleApiKeyChange(key: string) {
@@ -129,16 +174,21 @@ export default function Home() {
       const text = (data.text || "").trim();
       if (!text) return;
 
-      setTranscript((prev) => [
-        ...prev,
-        {
-          id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          text,
-          timestamp,
-          wordCount: countWords(text),
-        },
-      ]);
-      setMeetingStartTime((prev) => prev ?? new Date().toISOString());
+      const epochAtSuccess = transcriptEpochRef.current;
+      const newChunk: TranscriptChunk = {
+        id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        text,
+        timestamp,
+        wordCount: countWords(text),
+      };
+      setTranscript((prev) => {
+        if (transcriptEpochRef.current !== epochAtSuccess) return prev;
+        return [...prev, newChunk];
+      });
+      setMeetingStartTime((prev) => {
+        if (transcriptEpochRef.current !== epochAtSuccess) return prev;
+        return prev ?? new Date().toISOString();
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Transcription failed";
       setTranscriptError(msg);
@@ -181,6 +231,28 @@ export default function Home() {
     settings,
   });
 
+  const applySessionFromExport = useCallback(
+    (session: SessionExport) => {
+      transcriptEpochRef.current += 1;
+      if (recorder.isRecording) recorder.stop();
+      setTranscriptError(null);
+      setTranscript(session.transcript.map((c) => ({ ...c })));
+      setMeetingStartTime(session.meetingStartTime);
+      suggestions.hydrateBatches(session.suggestionBatches);
+      chat.hydrateMessages(session.chatMessages);
+      if (session.settings) {
+        const next = { ...DEFAULT_SETTINGS, ...session.settings };
+        setSettings(next);
+        try {
+          sessionStorage.setItem(SETTINGS_STORAGE, JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+      }
+    },
+    [recorder, suggestions, chat],
+  );
+
   const handleExpandSuggestion = useCallback(
     (s: Suggestion) => {
       void chat.expandSuggestion(s);
@@ -210,6 +282,9 @@ export default function Home() {
     (fixtureId: string) => {
       const fixture = getFixtureById(fixtureId);
       if (!fixture) return;
+      setPendingDraftSession(null);
+      clearDraftSession();
+      transcriptEpochRef.current += 1;
       if (recorder.isRecording) recorder.stop();
       suggestions.clearAll();
       chat.clear();
@@ -230,32 +305,75 @@ export default function Home() {
         setTranscriptError(result.error);
         return;
       }
-      if (recorder.isRecording) recorder.stop();
-      setTranscriptError(null);
-      const { session } = result;
-      setTranscript(session.transcript.map((c) => ({ ...c })));
-      setMeetingStartTime(session.meetingStartTime);
-      suggestions.hydrateBatches(session.suggestionBatches);
-      chat.hydrateMessages(session.chatMessages);
-      if (session.settings) {
-        const next = { ...DEFAULT_SETTINGS, ...session.settings };
-        setSettings(next);
-        try {
-          sessionStorage.setItem(SETTINGS_STORAGE, JSON.stringify(next));
-        } catch {
-          // ignore
-        }
-      }
+      setPendingDraftSession(null);
+      clearDraftSession();
+      applySessionFromExport(result.session);
     },
-    [recorder, suggestions, chat],
+    [applySessionFromExport],
   );
+
+  const handleResumeDraft = useCallback(() => {
+    if (!pendingDraftSession) return;
+    applySessionFromExport(pendingDraftSession);
+    setPendingDraftSession(null);
+    clearDraftSession();
+  }, [pendingDraftSession, applySessionFromExport]);
+
+  const handleDiscardDraft = useCallback(() => {
+    clearDraftSession();
+    setPendingDraftSession(null);
+  }, []);
 
   const canExportSession =
     transcript.length > 0 ||
     suggestions.batches.length > 0 ||
     chat.messages.length > 0;
 
+  const canStartFreshMeeting =
+    recorder.isRecording ||
+    transcribingCount > 0 ||
+    transcript.length > 0 ||
+    suggestions.batches.length > 0 ||
+    chat.messages.length > 0 ||
+    meetingStartTime != null;
+
+  const handleNewMeeting = useCallback(() => {
+    transcriptEpochRef.current += 1;
+    if (recorder.isRecording) recorder.stop();
+    suggestions.clearAll();
+    chat.clear();
+    setTranscript([]);
+    setMeetingStartTime(null);
+    setTranscriptError(null);
+    setPendingDraftSession(null);
+    clearDraftSession();
+  }, [recorder, suggestions, chat]);
+
   const canRecord = Boolean(apiKey);
+
+  /** Day 10 — debounced autosave so a refresh can recover in-progress work. */
+  useEffect(() => {
+    if (!canExportSession) return;
+    if (pendingDraftSession !== null) return;
+    const payload = buildSessionExport({
+      transcript,
+      suggestionBatches: suggestions.batches,
+      chatMessages: chat.messages,
+      meetingStartTime,
+      settings,
+    });
+    const json = JSON.stringify(payload);
+    const t = window.setTimeout(() => writeDraftSessionJson(json), 1200);
+    return () => clearTimeout(t);
+  }, [
+    transcript,
+    suggestions.batches,
+    chat.messages,
+    meetingStartTime,
+    settings,
+    canExportSession,
+    pendingDraftSession,
+  ]);
 
   async function handleToggleRecord() {
     if (!canRecord) {
@@ -276,6 +394,14 @@ export default function Home() {
         onOpenSettings={() => setSettingsOpen(true)}
         apiKeySet={Boolean(apiKey)}
       />
+
+      {pendingDraftSession && (
+        <DraftRecoveryBanner
+          exportedAt={pendingDraftSession.exportedAt}
+          onResume={handleResumeDraft}
+          onDiscard={handleDiscardDraft}
+        />
+      )}
 
       <main className="grid min-h-0 flex-1 grid-cols-1 gap-3 bg-[var(--bg-base)] p-3 md:grid-cols-3">
         <TranscriptColumn
@@ -298,9 +424,11 @@ export default function Home() {
               ? undefined
               : "Record, generate suggestions, or chat first."
           }
-          fixtureOptions={FIXTURE_SELECT_OPTIONS}
-          onLoadFixture={handleLoadFixture}
+          fixtureOptions={SHOW_QA_FIXTURES ? FIXTURE_SELECT_OPTIONS : undefined}
+          onLoadFixture={SHOW_QA_FIXTURES ? handleLoadFixture : undefined}
           onImportSessionJson={handleImportSessionJson}
+          onNewMeeting={handleNewMeeting}
+          newMeetingEnabled={canStartFreshMeeting}
         />
         <SuggestionsColumn
           batches={suggestions.batches}
@@ -334,6 +462,46 @@ export default function Home() {
         settings={settings}
         onSettingsChange={handleSettingsChange}
       />
+    </div>
+  );
+}
+
+function DraftRecoveryBanner({
+  exportedAt,
+  onResume,
+  onDiscard,
+}: {
+  exportedAt: string;
+  onResume: () => void;
+  onDiscard: () => void;
+}) {
+  return (
+    <div
+      role="status"
+      className="flex flex-wrap items-center justify-between gap-3 border-b border-teal-500/25 bg-teal-950/40 px-6 py-2.5 text-[13px] text-teal-100"
+    >
+      <span className="text-[var(--text-secondary)]">
+        <span className="font-medium text-teal-200">Local draft found</span>
+        {" · "}
+        Saved {formatDraftBannerTime(exportedAt)}. Resume to continue this
+        session, or discard to start empty.
+      </span>
+      <span className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={onResume}
+          className="rounded-md bg-[var(--accent-teal)] px-3 py-1.5 text-[12px] font-medium text-white transition hover:brightness-110"
+        >
+          Resume draft
+        </button>
+        <button
+          type="button"
+          onClick={onDiscard}
+          className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel-soft)] px-3 py-1.5 text-[12px] font-medium text-[var(--text-secondary)] transition hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+        >
+          Discard
+        </button>
+      </span>
     </div>
   );
 }
@@ -395,6 +563,8 @@ function TranscriptColumn({
   fixtureOptions,
   onLoadFixture,
   onImportSessionJson,
+  onNewMeeting,
+  newMeetingEnabled = false,
 }: {
   transcript: TranscriptChunk[];
   isRecording: boolean;
@@ -410,6 +580,8 @@ function TranscriptColumn({
   fixtureOptions?: { id: string; label: string }[];
   onLoadFixture?: (fixtureId: string) => void;
   onImportSessionJson?: (jsonText: string) => void;
+  onNewMeeting?: () => void;
+  newMeetingEnabled?: boolean;
 }) {
   return (
     <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-panel)] shadow-xl shadow-black/40">
@@ -434,6 +606,8 @@ function TranscriptColumn({
         fixtureOptions={fixtureOptions}
         onLoadFixture={onLoadFixture}
         onImportSessionJson={onImportSessionJson}
+        onNewMeeting={onNewMeeting}
+        newMeetingEnabled={newMeetingEnabled}
       />
     </section>
   );

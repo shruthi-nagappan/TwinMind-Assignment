@@ -30,6 +30,10 @@ const HALLUCINATION_SUBSTRINGS = [
   "subscribe to the channel",
   "see you in the next video",
   "see you next time",
+  // Whisper often regurgitates the `prompt` below when the chunk is silent or
+  // too low-SNR — treat as non-speech, not a real meeting line.
+  "the following is a transcript of a professional meeting",
+  "speakers are discussing business, technology, or strategy",
 ];
 
 function isLikelyHallucination(text: string): boolean {

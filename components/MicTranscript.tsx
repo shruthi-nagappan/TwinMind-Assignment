@@ -20,6 +20,9 @@ interface MicTranscriptProps {
   onLoadFixture?: (fixtureId: string) => void;
   /** Day 9 — raw JSON text from a prior export file. */
   onImportSessionJson?: (jsonText: string) => void;
+  /** Clear transcript, suggestions, and chat for a different call. */
+  onNewMeeting?: () => void;
+  newMeetingEnabled?: boolean;
 }
 
 export default function MicTranscript({
@@ -37,6 +40,8 @@ export default function MicTranscript({
   fixtureOptions,
   onLoadFixture,
   onImportSessionJson,
+  onNewMeeting,
+  newMeetingEnabled = false,
 }: MicTranscriptProps) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -119,14 +124,29 @@ export default function MicTranscript({
       <div className="mx-6 mt-4 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-panel-soft)] px-4 py-3 text-[13px] leading-relaxed text-[var(--text-secondary)]">
         The transcript scrolls and appends new chunks every ~30 seconds while
         recording. Use the mic button to start/stop. Each chunk is transcribed
-        independently via Whisper Large V3. Export downloads transcript,
-        suggestion batches, chat, and settings as one JSON file; import loads
-        them back for review or continued QA.
+        independently via Whisper Large V3. Use New meeting when you switch
+        calls so detection and suggestions start clean. Export / import JSON for
+        backup or QA.
       </div>
 
-      {(onExportSession || onImportSessionJson) && (
+      {(onExportSession || onImportSessionJson || onNewMeeting) && (
         <div className="mx-6 mt-3 flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
+            {onNewMeeting && (
+              <button
+                type="button"
+                onClick={onNewMeeting}
+                disabled={!newMeetingEnabled}
+                title={
+                  newMeetingEnabled
+                    ? "Clear transcript, suggestions, and chat for the next call"
+                    : "Nothing to reset yet"
+                }
+                className="inline-flex items-center gap-1.5 rounded-md border border-rose-500/35 bg-rose-500/10 px-3 py-1.5 text-[12px] font-medium text-rose-200 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-rose-500/10"
+              >
+                New meeting
+              </button>
+            )}
             {onExportSession && (
               <button
                 type="button"
