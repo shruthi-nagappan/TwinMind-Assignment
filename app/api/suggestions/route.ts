@@ -144,6 +144,19 @@ function parseAndValidate(raw: string): ParsedResponse | { error: string } {
   return { meeting_type, suggestions: out };
 }
 
+function isGroqJsonSchemaValidationError(err: unknown): boolean {
+  const msg =
+    err instanceof Error
+      ? err.message
+      : typeof err === "object" && err !== null && "message" in err
+        ? String((err as { message: unknown }).message)
+        : JSON.stringify(err);
+  return (
+    msg.includes("json_validate_failed") ||
+    msg.includes("Failed to validate JSON")
+  );
+}
+
 async function callGroqForSuggestions({
   groq,
   systemPrompt,
@@ -162,18 +175,41 @@ async function callGroqForSuggestions({
       "\n\nSTRICT MODE: Your last response was not valid JSON. Respond with ONLY the JSON object. No prose. No markdown fences. No keys other than the schema. Exactly 3 suggestions."
     : systemPrompt;
 
-  const resp = await groq.chat.completions.create({
-    model: GROQ_CHAT_MODEL,
-    temperature,
-    max_tokens: 900,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: finalSystem },
-      { role: "user", content: userPrompt },
-    ],
-  });
+  const messages = [
+    { role: "system" as const, content: finalSystem },
+    { role: "user" as const, content: userPrompt },
+  ];
 
-  return resp.choices[0]?.message?.content ?? "";
+  /** Extra headroom — truncated JSON makes Groq's json_object validator fail with 400. */
+  const maxTokens = strictify ? 1200 : 1400;
+
+  const create = (jsonObject: boolean) =>
+    groq.chat.completions.create({
+      model: GROQ_CHAT_MODEL,
+      temperature,
+      max_tokens: maxTokens,
+      messages,
+      ...(jsonObject ? { response_format: { type: "json_object" as const } } : {}),
+    });
+
+  // Strict internal retry: skip json_object — Groq rejects invalid generations
+  // before we can salvage; our parseAndValidate already handles minor slop.
+  if (strictify) {
+    const resp = await create(false);
+    return resp.choices[0]?.message?.content ?? "";
+  }
+
+  try {
+    const resp = await create(true);
+    return resp.choices[0]?.message?.content ?? "";
+  } catch (err) {
+    if (!isGroqJsonSchemaValidationError(err)) throw err;
+    console.warn(
+      "[/api/suggestions] Groq json_object validation failed, retrying without response_format",
+    );
+    const resp = await create(false);
+    return resp.choices[0]?.message?.content ?? "";
+  }
 }
 
 export async function POST(req: NextRequest) {
