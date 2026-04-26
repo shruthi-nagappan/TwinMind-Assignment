@@ -1,13 +1,20 @@
-# TwinMind — Live meeting copilot (assignment)
+# TwinMind — Live meeting copilot (take-home)
 
-Real-time **transcription** (Groq Whisper), **three live suggestions** per refresh tuned to meeting type, and a **streaming chat** column for detailed answers. Next.js App Router, client-side Groq API key (stored in `sessionStorage`), and API routes that proxy requests with your key.
+## What this is
 
-## Prerequisites
+A **three-column** live copilot: **transcript** (mic → chunked Whisper), **live suggestions** (three cards per refresh, tuned to inferred meeting type), and **streaming chat** (markdown answers, including “expand” from a suggestion). This layout is the product-facing version of a narrower prototype: everything stays readable while audio is in progress.
 
-- **Node.js** 20+ recommended  
-- A **[Groq](https://console.groq.com/) API key** with access to the models configured in `lib/prompts.ts` (Whisper + chat/suggestion models)
+## Tech stack (choices)
 
-## Quick start
+| Layer | Choice | Why |
+| ----- | ------ | --- |
+| App | **Next.js** (App Router) + **TypeScript** | API routes as a thin proxy, one deployable surface, typed client + server. |
+| UI | **Tailwind** + small local components | Fast iteration, consistent spacing/typography without a heavy kit. |
+| Speech-to-text | **Groq `whisper-large-v3`** | Low-latency transcription; chunks aligned to the configurable refresh window (~30s default). |
+| Reasoning | **Groq `openai/gpt-oss-120b`** | One strong model for suggestions, rolling transcript summary, and chat to keep behavior and tuning coherent. |
+| Key handling | **Browser `sessionStorage` + `x-groq-api-key`** | No `GROQ_API_KEY` in server env for this assignment; the user’s key never lands in exported JSON. |
+
+## Setup
 
 ```bash
 cd app
@@ -15,53 +22,57 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Paste your Groq API key under **Settings**, then use the mic to record (~30s chunks transcribed to the left column).
+Open `http://localhost:3000`, open **Settings**, paste a **Groq** key, then start the mic (or load a fixture / import JSON if enabled).
 
-## Scripts
+**Node.js** 20+ recommended.
 
-| Command        | Purpose                          |
-| -------------- | -------------------------------- |
-| `npm run dev`  | Local development server         |
+| Script | Purpose |
+| ------ | ------- |
+| `npm run dev` | Dev server |
 | `npm run build` / `npm start` | Production build & serve |
-| `npm test`     | Vitest (`lib/**/*.test.ts`)      |
-| `npm run lint` | ESLint                           |
+| `npm test` | Vitest (`lib/**/*.test.ts`) |
+| `npm run lint` | ESLint |
 
-## Environment variables
+**Optional env:** `NEXT_PUBLIC_SHOW_QA_FIXTURES=true` in `app/.env.local` exposes canned transcripts for testing suggestions without the mic.
 
-| Variable | Required | Description |
-| -------- | -------- | ----------- |
-| *(none)* | — | The app does **not** read `GROQ_API_KEY` from the server. You supply the key in the UI; it is sent as `x-groq-api-key` on API calls. |
-| `NEXT_PUBLIC_SHOW_QA_FIXTURES` | No | Set to `true` to show the **QA fixture** dropdown (canned transcripts for testing suggestions without the mic). Hidden by default. |
+## Functional behavior (assignment-aligned)
 
-Create `app/.env.local` for local flags, or set variables in your host (e.g. Vercel) for preview/production.
+- **Auto-refresh suggestions** on an interval while there is transcript + API key; skips silent regen when the transcript word count has not grown enough since the last batch (manual refresh bypasses that).
+- **Manual “Refresh transcript & suggestions”** — **not** “re-fetch suggestions only”: if recording, it **ends the current mic chunk immediately** (`flushChunk`), **waits for in-flight Whisper** to finish, then **forces** a new suggestion batch. If not recording, there is no new audio to flush; it still refreshes suggestions from the transcript already on screen.
+- **Chat** streams tokens; clicking a suggestion seeds an expand prompt.
+- **Export / import** session JSON (transcript, batches, chat, settings — **no** API key).
+- **Local draft** autosave to `localStorage` with resume/discard on reload.
 
-## Using the app
+## Prompt & context strategy
 
-1. **Settings** — Groq API key and editable prompts (suggestions, rolling summary, chat, temperatures, refresh interval).  
-2. **Mic & transcript** — Start/stop recording; each chunk is transcribed independently.  
-3. **Live suggestions** — Auto-refresh while there is transcript and a key; use **Reload suggestions** to force a batch.  
-4. **Chat** — Ask about the meeting or click a suggestion to expand into a streamed markdown answer.
+Suggestions receive **layered context** built in `lib/context.ts`:
 
-### Session workflow
+1. **Structured meeting context** — inferred `meeting_type`, clock duration, coarse phase (opening / deep_dive / closing) from heuristics + model output.
+2. **Rolling summary** — model-compressed older transcript so long meetings don’t blow the window.
+3. **Recent verbatim transcript** — last *N* minutes (`suggestionContextWindow` in settings).
+4. **`last_statement`** — the newest chunk; weighted as the primary signal in `lib/prompts.ts`.
 
-- **New meeting** — Clears transcript, suggestion history, chat, meeting clock, and the **local draft** (see below). Stop recording first if needed.  
-- **Export session (JSON)** — Download transcript, batches, chat, and current settings (no API key).  
-- **Import session (JSON)** — Restore from a prior export file.  
-- **Local draft (autosave)** — While you have session content, the app debounces writes to `localStorage`. After a refresh, choose **Resume draft** or **Discard** from the banner.
+The default suggestion system prompt enforces **type diversity** (answer / fact_check / question_to_ask / talking_point), **preview-first** copy (no meta “you should consider”), meeting-type playbooks, and **anti-repeat** vs the prior batch via `previousSuggestionPreviews` from `useSuggestions`.
 
-Whisper uses a short meeting-style **prompt**; obvious junk (including prompt echo on silent chunks) is filtered in `app/api/transcribe/route.ts`.
+Whisper gets a short domain **prompt** on transcribe; obvious junk / prompt echo on near-silent chunks is filtered server-side.
 
-## Deployment (e.g. Vercel)
+## Tradeoffs & limitations
 
-Connect the Git repo whose **root is this `app/` folder** (or set **Root Directory** to `app` if the repo root is higher). Build command: `npm run build`, output: Next.js default. Add `NEXT_PUBLIC_SHOW_QA_FIXTURES` only if you want QA fixtures in that environment.
+- **Client-supplied API key** — simplest for a demo and grading, but a production app would use server-side auth, quotas, and never trust the browser with billing keys.
+- **Fixed chunk cadence** — good for batching cost and suggestion stability; worse than true streaming STT for sub-second captions.
+- **No diarization** — transcript is time-ordered text only; “who spoke” is inferred weakly from content, not labels.
+- **Suggestion JSON** — Groq `json_object` helps shape; the API route retries with looser settings if validation fails (speed vs strictness).
+- **Skip-regeneration threshold** — reduces duplicate batches on slow meetings; **manual refresh** always runs (`force: true`).
+- **Persistence** — session export/import + local draft; no multi-user database.
 
-## Project layout
+## Deployment
 
-```
-app/                 # Next.js routes (page, API)
-components/          # UI (header, mic/transcript, settings, suggestions, chat)
-lib/                 # Hooks, prompts, types, Groq context, export/import, draft, fixtures
-```
+Deploy the **`app/`** directory (e.g. Vercel: set **Root Directory** to `app` if the repo root is above it). Build: `npm run build`. Add `NEXT_PUBLIC_SHOW_QA_FIXTURES` only if you want QA fixtures in that environment.
+
+## Submission (fill in for your hand-in)
+
+- **Live URL:** _your deployed URL_
+- **Repository:** _link to this repo / branch_
 
 ## License
 

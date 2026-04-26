@@ -21,6 +21,12 @@ export interface UseMicRecorderState {
   error: string | null;
   start: () => Promise<void>;
   stop: () => void;
+  /**
+   * End the current in-progress audio chunk immediately (instead of waiting
+   * for the chunk timer). Whisper runs on that blob so the transcript can
+   * update before a manual “refresh suggestions” step.
+   */
+  flushChunk: () => void;
 }
 
 function pickMimeType(): string {
@@ -237,6 +243,18 @@ export function useMicRecorder({
     audioContextRef.current = null;
   }, []);
 
+  const flushChunk = useCallback(() => {
+    if (!isActiveRef.current) return;
+    if (chunkTimerRef.current) {
+      clearTimeout(chunkTimerRef.current);
+      chunkTimerRef.current = null;
+    }
+    const rec = recorderRef.current;
+    if (rec && rec.state === "recording") {
+      rec.stop();
+    }
+  }, []);
+
   const stop = useCallback(() => {
     isActiveRef.current = false;
     setIsRecording(false);
@@ -270,5 +288,5 @@ export function useMicRecorder({
     };
   }, [teardownAudioGraph]);
 
-  return { isRecording, error, start, stop };
+  return { isRecording, error, start, stop, flushChunk };
 }
